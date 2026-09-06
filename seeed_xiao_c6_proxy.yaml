@@ -22,11 +22,8 @@ esp32:
 esphome:
   includes:
     - <esp_wifi.h>
-  on_boot:
-    - priority: -10
-      then:
-        - output.turn_off: rf_switch_enable    # LOW  -> RF switch powered
-        - output.turn_off: rf_antenna_select   # LOW  -> INTERNAL PCB antenna  (was turn_on = external)
+  # No on_boot antenna forcing: the "External Antenna" switch below is the
+  # single source of truth (restore_mode decides the boot state).
 
 logger:
   level: DEBUG
@@ -76,7 +73,7 @@ switch:
     name: "External Antenna"
     id: sw_external_antenna            # added: enables !extend + the readback below
     optimistic: true
-    restore_mode: ALWAYS_OFF           # was ALWAYS_ON -> now defaults to internal every boot
+    restore_mode: RESTORE_DEFAULT_OFF  # remembers last toggle; defaults to internal
     turn_on_action:                    # external (U.FL / RF2)
       - output.turn_off: rf_switch_enable
       - output.turn_on: rf_antenna_select
