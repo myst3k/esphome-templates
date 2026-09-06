@@ -1,0 +1,207 @@
+# Seeed Studio XIAO ESP32-C6 — Bluetooth proxy package (INTERNAL antenna)
+# Fork of DerekSeaman's proxy config, with the antenna defaulted to the internal
+# PCB antenna so it stops reverting to the (unattached) external U.FL on reboot.
+#
+# Usage: in a Device-Builder-generated device YAML, add:
+#   packages:
+#     device:
+#       url: https://github.com/myst3k/esphome-templates
+#       ref: main
+#       file: seeed_xiao_c6_proxy.yaml
+#       refresh: always
+# The generated esphome/esp32/logger/api/ota/wifi/captive_portal merge with this.
+
+esp32:
+  board: seeed_xiao_esp32c6          # board id (not just variant) -> RF_* pin aliases
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_SOC_WIFI_HE_SUPPORT: "y"   # Wi-Fi 6 (802.11ax); C6 is 2.4 GHz only
+      CONFIG_ESP_WIFI_11AX_SUPPORT: "y"
+
+esphome:
+  includes:
+    - <esp_wifi.h>
+  on_boot:
+    - priority: -10
+      then:
+        - output.turn_off: rf_switch_enable    # LOW  -> RF switch powered
+        - output.turn_off: rf_antenna_select   # LOW  -> INTERNAL PCB antenna  (was turn_on = external)
+
+logger:
+  level: DEBUG
+  baud_rate: 115200
+  hardware_uart: USB_SERIAL_JTAG
+
+api:
+  reboot_timeout: 15min
+
+wifi:
+  domain: .local
+  power_save_mode: NONE
+  fast_connect: true
+  enable_on_boot: true
+  reboot_timeout: 10min
+  enable_btm: true   # 802.11v BSS Transition Management (AP-coordinated roaming)
+  enable_rrm: true   # 802.11k Radio Resource Management (neighbor-assisted scanning)
+  ap:
+    ap_timeout: 120s
+  on_connect:
+    then:
+      - component.update: wifi_channel_sensor
+  on_disconnect:
+    then:
+      - lambda: |-
+          id(_wifi_disconnects_since_boot)++;
+
+mdns:
+
+# GPIO15 = yellow USER LED: solid when API connected, blinks when not.
+status_led:
+  pin:
+    number: GPIO15
+
+# Antenna control (FM8625H RF switch).
+# RF_SWITCH_EN (GPIO3) = power (active LOW), RF_ANT_SELECT (GPIO14) = selector.
+output:
+  - platform: gpio
+    id: rf_switch_enable
+    pin: RF_SWITCH_EN
+  - platform: gpio
+    id: rf_antenna_select
+    pin: RF_ANT_SELECT
+
+switch:
+  - platform: template
+    name: "External Antenna"
+    id: sw_external_antenna            # added: enables !extend + the readback below
+    optimistic: true
+    restore_mode: ALWAYS_OFF           # was ALWAYS_ON -> now defaults to internal every boot
+    turn_on_action:                    # external (U.FL / RF2)
+      - output.turn_off: rf_switch_enable
+      - output.turn_on: rf_antenna_select
+    turn_off_action:                   # internal (PCB / RF1)
+      - output.turn_off: rf_switch_enable
+      - output.turn_off: rf_antenna_select
+
+esp32_ble_tracker:
+  id: ble_tracker
+  scan_parameters:
+    active: true
+    interval: 320ms
+    window: 90ms
+    continuous: true
+
+bluetooth_proxy:
+  active: true
+
+select:
+  - platform: template
+    name: "BLE Scan Profile"
+    id: sel_ble_scan_profile
+    optimistic: true
+    restore_value: true
+    initial_option: "Medium"
+    options:
+      - "Low"
+      - "Medium"
+      - "High"
+    set_action:
+      - lambda: |-
+          id(ble_tracker).stop_scan();
+          auto opt = id(sel_ble_scan_profile).current_option();
+          if (opt == "Low") {
+            id(ble_tracker).set_scan_interval(320);
+            id(ble_tracker).set_scan_window(30);
+          } else if (opt == "Medium") {
+            id(ble_tracker).set_scan_interval(320);
+            id(ble_tracker).set_scan_window(90);
+          } else {
+            id(ble_tracker).set_scan_interval(320);
+            id(ble_tracker).set_scan_window(160);
+          }
+          id(ble_tracker).start_scan();
+
+sensor:
+  - platform: internal_temperature
+    name: "Internal Temp"
+    entity_category: diagnostic
+
+  - platform: uptime
+    name: "Uptime"
+    unit_of_measurement: "h"
+    accuracy_decimals: 2
+    update_interval: 60s
+    filters:
+      - lambda: return x / 3600.0;
+    entity_category: diagnostic
+
+  - platform: wifi_signal
+    id: wifi_signal_dbm
+    name: "Wi-Fi RSSI"
+    update_interval: 30s
+    entity_category: diagnostic
+
+  - platform: template
+    name: "Wi-Fi Disconnects (since boot)"
+    id: wifi_disconnects_since_boot_sensor
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: |-
+      return id(_wifi_disconnects_since_boot);
+
+  - platform: template
+    name: "Wi-Fi Channel"
+    id: wifi_channel_sensor
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: |-
+      wifi_ap_record_t ap_info;
+      if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+        return (float) ap_info.primary;
+      }
+      return NAN;
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP"
+      entity_category: diagnostic
+    mac_address:
+      name: "MAC"
+      entity_category: diagnostic
+    ssid:
+      name: "SSID"
+      entity_category: diagnostic
+    bssid:
+      name: "BSSID"
+      entity_category: diagnostic
+
+  # Bonus: honest read-back of which antenna the switch has selected.
+  - platform: template
+    name: "Active Antenna"
+    entity_category: diagnostic
+    update_interval: 30s
+    lambda: |-
+      return id(sw_external_antenna).state
+        ? std::string("External (U.FL)")
+        : std::string("Internal (PCB)");
+
+button:
+  - platform: restart
+    name: "Restart Device"
+
+globals:
+  - id: _wifi_disconnects_since_boot
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+time:
+  - platform: sntp
+    id: sntp_time
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
