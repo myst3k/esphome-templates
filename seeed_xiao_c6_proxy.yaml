@@ -22,8 +22,14 @@ esp32:
 esphome:
   includes:
     - <esp_wifi.h>
-  # No on_boot antenna forcing: the "External Antenna" switch below is the
-  # single source of truth (restore_mode decides the boot state).
+  # Derek's original on_boot forced the EXTERNAL antenna on every boot. Kept here
+  # commented out in case a U.FL antenna is ever attached. With it disabled, the
+  # "External Antenna" switch below (restore_mode) is the source of truth.
+  # on_boot:
+  #   - priority: -10
+  #     then:
+  #       - output.turn_off: rf_switch_enable    # LOW  -> RF switch power ON
+  #       - output.turn_on: rf_antenna_select    # HIGH -> external antenna (U.FL)
 
 logger:
   level: DEBUG
